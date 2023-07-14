@@ -43,6 +43,7 @@ import (
 	clientauthv1beta1 "k8s.io/client-go/pkg/apis/clientauthentication/v1beta1"
 	"sigs.k8s.io/aws-iam-authenticator/pkg"
 	"sigs.k8s.io/aws-iam-authenticator/pkg/arn"
+	"sigs.k8s.io/aws-iam-authenticator/pkg/config"
 	"sigs.k8s.io/aws-iam-authenticator/pkg/metrics"
 )
 
@@ -88,7 +89,10 @@ const (
 	presignedURLExpiration = 15 * time.Minute
 	v1Prefix               = "k8s-aws-v1."
 	maxTokenLenBytes       = 1024 * 4
-	clusterIDHeader        = "x-k8s-aws-id"
+	// One of these headers must be specified to scope the token to a uniquely identifiable cluster
+	headerClusterID   = "x-k8s-aws-id"
+	headerPrimaryID   = "x-k8s-aws-id2"
+	headerSecondaryID = "x-k8s-aws-id3"
 	// Format of the X-Amz-Date header used for expiration
 	// https://golang.org/pkg/time/#pkg-constants
 	dateHeaderFormat   = "20060102T150405Z"
@@ -106,7 +110,7 @@ type Token struct {
 // GetTokenOptions is passed to GetWithOptions to provide an extensible get token interface
 type GetTokenOptions struct {
 	Region               string
-	ClusterID            string
+	Cluster              config.Cluster
 	AssumeRoleARN        string
 	AssumeRoleExternalID string
 	SessionName          string
@@ -176,7 +180,7 @@ type Generator interface {
 	// Get a token using the provided options
 	GetWithOptions(options *GetTokenOptions) (Token, error)
 	// GetWithSTS returns a token valid for clusterID using the given STS client.
-	GetWithSTS(clusterID string, stsAPI stsiface.STSAPI) (Token, error)
+	GetWithSTS(cluster config.Cluster, stsAPI stsiface.STSAPI) (Token, error)
 	// FormatJSON returns the client auth formatted json for the ExecCredential auth
 	FormatJSON(Token) string
 }
@@ -197,14 +201,14 @@ func NewGenerator(forwardSessionName bool, cache bool) (Generator, error) {
 // Get uses the directly available AWS credentials to return a token valid for
 // clusterID. It follows the default AWS credential handling behavior.
 func (g generator) Get(clusterID string) (Token, error) {
-	return g.GetWithOptions(&GetTokenOptions{ClusterID: clusterID})
+	return g.GetWithOptions(&GetTokenOptions{Cluster: config.Cluster{ID: clusterID}})
 }
 
 // GetWithRole assumes the given AWS IAM role and returns a token valid for
 // clusterID. If roleARN is empty, behaves like Get (does not assume a role).
 func (g generator) GetWithRole(clusterID string, roleARN string) (Token, error) {
 	return g.GetWithOptions(&GetTokenOptions{
-		ClusterID:     clusterID,
+		Cluster:       config.Cluster{ID: clusterID},
 		AssumeRoleARN: roleARN,
 	})
 }
@@ -213,7 +217,7 @@ func (g generator) GetWithRole(clusterID string, roleARN string) (Token, error) 
 // like GetWithRole.
 func (g generator) GetWithRoleForSession(clusterID string, roleARN string, sess *session.Session) (Token, error) {
 	return g.GetWithOptions(&GetTokenOptions{
-		ClusterID:     clusterID,
+		Cluster:       config.Cluster{ID: clusterID},
 		AssumeRoleARN: roleARN,
 		Session:       sess,
 	})
@@ -231,8 +235,10 @@ func StdinStderrTokenProvider() (string, error) {
 // If no session has been passed in options, it will build a new session. If an
 // AssumeRoleARN was passed in then assume the role for the session.
 func (g generator) GetWithOptions(options *GetTokenOptions) (Token, error) {
-	if options.ClusterID == "" {
-		return Token{}, fmt.Errorf("ClusterID is required")
+	if options.Cluster.ID == "" &&
+		options.Cluster.ID2 == "" &&
+		options.Cluster.ID3 == "" {
+		return Token{}, fmt.Errorf("Must specify either ClusterID, UUID, or UUIDAlternate")
 	}
 
 	if options.Session == nil {
@@ -263,7 +269,7 @@ func (g generator) GetWithOptions(options *GetTokenOptions) (Token, error) {
 				profile = session.DefaultSharedConfigProfile
 			}
 			// create a cacheing Provider wrapper around the Credentials
-			if cacheProvider, err := NewFileCacheProvider(options.ClusterID, profile, options.AssumeRoleARN, sess.Config.Credentials); err == nil {
+			if cacheProvider, err := NewFileCacheProvider(options.Cluster, profile, options.AssumeRoleARN, sess.Config.Credentials); err == nil {
 				sess.Config.Credentials = credentials.NewCredentials(&cacheProvider)
 			} else {
 				_, _ = fmt.Fprintf(os.Stderr, "unable to use cache: %v\n", err)
@@ -315,14 +321,22 @@ func (g generator) GetWithOptions(options *GetTokenOptions) (Token, error) {
 		stsAPI = sts.New(options.Session, &aws.Config{Credentials: creds})
 	}
 
-	return g.GetWithSTS(options.ClusterID, stsAPI)
+	return g.GetWithSTS(options.Cluster, stsAPI)
 }
 
 // GetWithSTS returns a token valid for clusterID using the given STS client.
-func (g generator) GetWithSTS(clusterID string, stsAPI stsiface.STSAPI) (Token, error) {
+func (g generator) GetWithSTS(cluster config.Cluster, stsAPI stsiface.STSAPI) (Token, error) {
 	// generate an sts:GetCallerIdentity request and add our custom cluster ID header
 	request, _ := stsAPI.GetCallerIdentityRequest(&sts.GetCallerIdentityInput{})
-	request.HTTPRequest.Header.Add(clusterIDHeader, clusterID)
+	if cluster.ID != "" {
+		request.HTTPRequest.Header.Add(headerClusterID, cluster.ID)
+	}
+	if cluster.ID2 != "" {
+		request.HTTPRequest.Header.Add(headerPrimaryID, cluster.ID2)
+	}
+	if cluster.ID3 != "" {
+		request.HTTPRequest.Header.Add(headerSecondaryID, cluster.ID3)
+	}
 
 	// Sign the request.  The expires parameter (sets the x-amz-expires header) is
 	// currently ignored by STS, and the token expires 15 minutes after the x-amz-date
@@ -374,7 +388,7 @@ type Verifier interface {
 
 type tokenVerifier struct {
 	client            *http.Client
-	clusterID         string
+	cluster           config.Cluster
 	validSTShostnames map[string]bool
 }
 
@@ -433,7 +447,7 @@ func stsHostsForPartition(partitionID, region string) map[string]bool {
 }
 
 // NewVerifier creates a Verifier that is bound to the clusterID and uses the default http client.
-func NewVerifier(clusterID, partitionID, region string) Verifier {
+func NewVerifier(cluster config.Cluster, partitionID, region string) Verifier {
 	// Initialize metrics if they haven't already been initialized to avoid a
 	// nil pointer panic when setting metric values.
 	if !metrics.Initialized() {
@@ -446,7 +460,7 @@ func NewVerifier(clusterID, partitionID, region string) Verifier {
 				return http.ErrUseLastResponse
 			},
 		},
-		clusterID:         clusterID,
+		cluster:           cluster,
 		validSTShostnames: stsHostsForPartition(partitionID, region),
 	}
 }
@@ -518,8 +532,8 @@ func (v tokenVerifier) Verify(token string) (*Identity, error) {
 		return nil, FormatError{"unexpected action parameter in pre-signed URL"}
 	}
 
-	if !hasSignedClusterIDHeader(&queryParamsLower) {
-		return nil, FormatError{fmt.Sprintf("client did not sign the %s header in the pre-signed URL", clusterIDHeader)}
+	if !hasSignedClusterHeader(&queryParamsLower) {
+		return nil, FormatError{fmt.Sprintf("client must sign one of [%s, %s, %s] headers in the pre-signed URL", headerClusterID, headerPrimaryID, headerSecondaryID)}
 	}
 
 	// We validate x-amz-expires is between 0 and 15 minutes (900 seconds) although currently pre-signed STS URLs, and
@@ -549,7 +563,16 @@ func (v tokenVerifier) Verify(token string) (*Identity, error) {
 	}
 
 	req, err := http.NewRequest("GET", parsedURL.String(), nil)
-	req.Header.Set(clusterIDHeader, v.clusterID)
+
+	if header := queryParamsLower.Get(headerClusterID); header != "" {
+		req.Header.Set(headerClusterID, v.cluster.ID)
+	}
+	if header := queryParamsLower.Get(headerPrimaryID); header != "" {
+		req.Header.Set(headerPrimaryID, v.cluster.ID2)
+	}
+	if header := queryParamsLower.Get(headerSecondaryID); header != "" {
+		req.Header.Set(headerSecondaryID, v.cluster.ID2)
+	}
 	req.Header.Set("accept", "application/json")
 
 	response, err := v.client.Do(req)
@@ -618,11 +641,13 @@ func validateDuplicateParameters(queryParams url.Values) error {
 	return nil
 }
 
-func hasSignedClusterIDHeader(paramsLower *url.Values) bool {
+func hasSignedClusterHeader(paramsLower *url.Values) bool {
 	signedHeaders := strings.Split(paramsLower.Get("x-amz-signedheaders"), ";")
-	for _, hdr := range signedHeaders {
-		if strings.ToLower(hdr) == strings.ToLower(clusterIDHeader) {
-			return true
+	for _, got := range signedHeaders {
+		for _, want := range []string{headerClusterID, headerPrimaryID, headerSecondaryID} {
+			if strings.ToLower(got) == want {
+				return true
+			}
 		}
 	}
 	return false

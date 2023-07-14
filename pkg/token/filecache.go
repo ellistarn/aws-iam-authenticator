@@ -4,15 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/gofrs/flock"
-	"gopkg.in/yaml.v2"
 	"io/fs"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"runtime"
 	"time"
+
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/gofrs/flock"
+	"gopkg.in/yaml.v2"
+	"sigs.k8s.io/aws-iam-authenticator/pkg/config"
 )
 
 // env variable name for custom credential cache file location
@@ -80,34 +82,34 @@ var newFlock = func(filename string) filelock {
 // cacheFile is a map of clusterID/roleARNs to cached credentials
 type cacheFile struct {
 	// a map of clusterIDs/profiles/roleARNs to cachedCredentials
-	ClusterMap map[string]map[string]map[string]cachedCredential `yaml:"clusters"`
+	ClusterMap map[config.Cluster]map[string]map[string]cachedCredential `yaml:"clusters"`
 }
 
 // a utility type for dealing with compound cache keys
 type cacheKey struct {
-	clusterID string
-	profile   string
-	roleARN   string
+	cluster config.Cluster
+	profile string
+	roleARN string
 }
 
 func (c *cacheFile) Put(key cacheKey, credential cachedCredential) {
-	if _, ok := c.ClusterMap[key.clusterID]; !ok {
+	if _, ok := c.ClusterMap[key.cluster]; !ok {
 		// first use of this cluster id
-		c.ClusterMap[key.clusterID] = map[string]map[string]cachedCredential{}
+		c.ClusterMap[key.cluster] = map[string]map[string]cachedCredential{}
 	}
-	if _, ok := c.ClusterMap[key.clusterID][key.profile]; !ok {
+	if _, ok := c.ClusterMap[key.cluster][key.profile]; !ok {
 		// first use of this profile
-		c.ClusterMap[key.clusterID][key.profile] = map[string]cachedCredential{}
+		c.ClusterMap[key.cluster][key.profile] = map[string]cachedCredential{}
 	}
-	c.ClusterMap[key.clusterID][key.profile][key.roleARN] = credential
+	c.ClusterMap[key.cluster][key.profile][key.roleARN] = credential
 }
 
 func (c *cacheFile) Get(key cacheKey) (credential cachedCredential) {
-	if _, ok := c.ClusterMap[key.clusterID]; ok {
-		if _, ok := c.ClusterMap[key.clusterID][key.profile]; ok {
+	if _, ok := c.ClusterMap[key.cluster]; ok {
+		if _, ok := c.ClusterMap[key.cluster][key.profile]; ok {
 			// we at least have this cluster and profile combo in the map, if no matching roleARN, map will
 			// return the zero-value for cachedCredential, which expired a long time ago.
-			credential = c.ClusterMap[key.clusterID][key.profile][key.roleARN]
+			credential = c.ClusterMap[key.cluster][key.profile][key.roleARN]
 		}
 	}
 	return
@@ -137,7 +139,7 @@ func (c *cachedCredential) IsExpired() bool {
 // lock is held on the filename.
 func readCacheWhileLocked(filename string) (cache cacheFile, err error) {
 	cache = cacheFile{
-		map[string]map[string]map[string]cachedCredential{},
+		map[config.Cluster]map[string]map[string]cachedCredential{},
 	}
 	data, err := f.ReadFile(filename)
 	if err != nil {
@@ -177,12 +179,12 @@ type FileCacheProvider struct {
 // and works with an on disk cache to speed up credential usage when the cached copy is not expired.
 // If there are any problems accessing or initializing the cache, an error will be returned, and
 // callers should just use the existing credentials provider.
-func NewFileCacheProvider(clusterID, profile, roleARN string, creds *credentials.Credentials) (FileCacheProvider, error) {
+func NewFileCacheProvider(cluster config.Cluster, profile, roleARN string, creds *credentials.Credentials) (FileCacheProvider, error) {
 	if creds == nil {
 		return FileCacheProvider{}, errors.New("no underlying Credentials object provided")
 	}
 	filename := CacheFilename()
-	cacheKey := cacheKey{clusterID, profile, roleARN}
+	cacheKey := cacheKey{cluster, profile, roleARN}
 	cachedCredential := cachedCredential{}
 	// ensure path to cache file exists
 	_ = f.MkdirAll(filepath.Dir(filename), 0700)

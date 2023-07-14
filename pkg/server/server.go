@@ -69,7 +69,6 @@ type handler struct {
 	http.ServeMux
 	verifier         token.Verifier
 	ec2Provider      ec2provider.EC2Provider
-	clusterID        string
 	mappers          []mapper.Mapper
 	scrubbedAccounts []string
 }
@@ -195,9 +194,8 @@ func (c *Server) getHandler(mappers []mapper.Mapper, ec2DescribeQps int, ec2Desc
 	}
 
 	h := &handler{
-		verifier:         token.NewVerifier(c.ClusterID, c.PartitionID, instanceRegion),
+		verifier:         token.NewVerifier(c.Cluster, c.PartitionID, instanceRegion),
 		ec2Provider:      ec2provider.New(c.ServerEC2DescribeInstancesRoleARN, instanceRegion, ec2DescribeQps, ec2DescribeBurst),
-		clusterID:        c.ClusterID,
 		mappers:          mappers,
 		scrubbedAccounts: c.Config.ScrubbedAWSAccounts,
 	}

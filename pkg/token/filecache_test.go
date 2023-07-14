@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"github.com/aws/aws-sdk-go/aws/credentials"
 	"os"
+	"reflect"
 	"testing"
 	"time"
+
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	"sigs.k8s.io/aws-iam-authenticator/pkg/config"
 )
 
 type stubProvider struct {
@@ -170,7 +173,7 @@ func validateFileCacheProvider(t *testing.T, p FileCacheProvider, err error, c *
 	if p.credentials != c {
 		t.Errorf("Credentials not copied")
 	}
-	if p.cacheKey.clusterID != "CLUSTER" {
+	if reflect.DeepEqual(p.cacheKey.cluster, config.Cluster{ID2: "CLUSTER"}) {
 		t.Errorf("clusterID not copied")
 	}
 	if p.cacheKey.profile != "PROFILE" {
@@ -210,7 +213,7 @@ func TestNewFileCacheProvider_Missing(t *testing.T) {
 
 	// missing cache file
 	tf.err = os.ErrNotExist
-	p, err := NewFileCacheProvider("CLUSTER", "PROFILE", "ARN", c)
+	p, err := NewFileCacheProvider(config.Cluster{ID2: "CLUSTER"}, "PROFILE", "ARN", c)
 	validateFileCacheProvider(t, p, err, c)
 	if !p.cachedCredential.IsExpired() {
 		t.Errorf("missing cache file should result in expired cached credential")
@@ -225,7 +228,7 @@ func TestNewFileCacheProvider_BadPermissions(t *testing.T) {
 
 	// bad permissions
 	tf.fileinfo.mode = 0777
-	_, err := NewFileCacheProvider("CLUSTER", "PROFILE", "ARN", c)
+	_, err := NewFileCacheProvider(config.Cluster{ID2: "CLUSTER"}, "PROFILE", "ARN", c)
 	if err == nil {
 		t.Errorf("Expected error due to public permissions")
 	}
@@ -243,7 +246,7 @@ func TestNewFileCacheProvider_Unlockable(t *testing.T) {
 	// unable to lock
 	testFlock.success = false
 	testFlock.err = errors.New("lock stuck, needs wd-40")
-	_, err := NewFileCacheProvider("CLUSTER", "PROFILE", "ARN", c)
+	_, err := NewFileCacheProvider(config.Cluster{ID2: "CLUSTER"}, "PROFILE", "ARN", c)
 	if err == nil {
 		t.Errorf("Expected error due to lock failure")
 	}
@@ -258,7 +261,7 @@ func TestNewFileCacheProvider_Unreadable(t *testing.T) {
 
 	// unable to read existing cache
 	tf.err = errors.New("read failure")
-	_, err := NewFileCacheProvider("CLUSTER", "PROFILE", "ARN", c)
+	_, err := NewFileCacheProvider(config.Cluster{ID2: "CLUSTER"}, "PROFILE", "ARN", c)
 	if err == nil {
 		t.Errorf("Expected error due to read failure")
 	}
@@ -272,7 +275,7 @@ func TestNewFileCacheProvider_Unparseable(t *testing.T) {
 
 	// unable to parse yaml
 	tf.data = []byte("invalid: yaml: file")
-	_, err := NewFileCacheProvider("CLUSTER", "PROFILE", "ARN", c)
+	_, err := NewFileCacheProvider(config.Cluster{ID2: "CLUSTER"}, "PROFILE", "ARN", c)
 	if err == nil {
 		t.Errorf("Expected error due to bad yaml")
 	}
@@ -284,7 +287,7 @@ func TestNewFileCacheProvider_Empty(t *testing.T) {
 	_, _, _ = getMocks()
 
 	// successfully parse existing but empty cache file
-	p, err := NewFileCacheProvider("CLUSTER", "PROFILE", "ARN", c)
+	p, err := NewFileCacheProvider(config.Cluster{ID2: "CLUSTER"}, "PROFILE", "ARN", c)
 	validateFileCacheProvider(t, p, err, c)
 	if !p.cachedCredential.IsExpired() {
 		t.Errorf("empty cache file should result in expired cached credential")
@@ -300,7 +303,7 @@ func TestNewFileCacheProvider_ExistingCluster(t *testing.T) {
 	tf.data = []byte(`clusters:
   CLUSTER:
 `)
-	p, err := NewFileCacheProvider("CLUSTER", "PROFILE", "ARN", c)
+	p, err := NewFileCacheProvider(config.Cluster{ID2: "CLUSTER"}, "PROFILE", "ARN", c)
 	validateFileCacheProvider(t, p, err, c)
 	if !p.cachedCredential.IsExpired() {
 		t.Errorf("missing arn in cache file should result in expired cached credential")
@@ -324,7 +327,7 @@ func TestNewFileCacheProvider_ExistingARN(t *testing.T) {
           providername: JKL
         expiration: 2018-01-02T03:04:56.789Z
 `)
-	p, err := NewFileCacheProvider("CLUSTER", "PROFILE", "ARN", c)
+	p, err := NewFileCacheProvider(config.Cluster{ID2: "CLUSTER"}, "PROFILE", "ARN", c)
 	validateFileCacheProvider(t, p, err, c)
 	if p.cachedCredential.Credential.AccessKeyID != "ABC" || p.cachedCredential.Credential.SecretAccessKey != "DEF" ||
 		p.cachedCredential.Credential.SessionToken != "GHI" || p.cachedCredential.Credential.ProviderName != "JKL" {
@@ -357,7 +360,7 @@ func TestFileCacheProvider_Retrieve_NoExpirer(t *testing.T) {
 
 	// initialize from missing cache file
 	tf.err = os.ErrNotExist
-	p, err := NewFileCacheProvider("CLUSTER", "PROFILE", "ARN", c)
+	p, err := NewFileCacheProvider(config.Cluster{ID2: "CLUSTER"}, "PROFILE", "ARN", c)
 	validateFileCacheProvider(t, p, err, c)
 
 	credential, err := p.Retrieve()
@@ -389,7 +392,7 @@ func TestFileCacheProvider_Retrieve_WithExpirer_Unlockable(t *testing.T) {
 
 	// initialize from missing cache file
 	tf.err = os.ErrNotExist
-	p, err := NewFileCacheProvider("CLUSTER", "PROFILE", "ARN", c)
+	p, err := NewFileCacheProvider(config.Cluster{ID2: "CLUSTER"}, "PROFILE", "ARN", c)
 	validateFileCacheProvider(t, p, err, c)
 
 	// retrieve credential, which will fetch from underlying Provider
@@ -413,7 +416,7 @@ func TestFileCacheProvider_Retrieve_WithExpirer_Unwritable(t *testing.T) {
 
 	// initialize from missing cache file
 	tf.err = os.ErrNotExist
-	p, err := NewFileCacheProvider("CLUSTER", "PROFILE", "ARN", c)
+	p, err := NewFileCacheProvider(config.Cluster{ID2: "CLUSTER"}, "PROFILE", "ARN", c)
 	validateFileCacheProvider(t, p, err, c)
 
 	// retrieve credential, which will fetch from underlying Provider
@@ -459,7 +462,7 @@ func TestFileCacheProvider_Retrieve_WithExpirer_Writable(t *testing.T) {
 
 	// initialize from missing cache file
 	tf.err = os.ErrNotExist
-	p, err := NewFileCacheProvider("CLUSTER", "PROFILE", "ARN", c)
+	p, err := NewFileCacheProvider(config.Cluster{ID2: "CLUSTER"}, "PROFILE", "ARN", c)
 	validateFileCacheProvider(t, p, err, c)
 	tf.err = nil
 
@@ -493,7 +496,7 @@ func TestFileCacheProvider_Retrieve_CacheHit(t *testing.T) {
           providername: JKL
         expiration: 2018-01-02T03:04:56.789Z
 `)
-	p, err := NewFileCacheProvider("CLUSTER", "PROFILE", "ARN", c)
+	p, err := NewFileCacheProvider(config.Cluster{ID2: "CLUSTER"}, "PROFILE", "ARN", c)
 	validateFileCacheProvider(t, p, err, c)
 
 	// fiddle with clock

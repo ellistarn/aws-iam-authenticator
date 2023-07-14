@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 
+	"sigs.k8s.io/aws-iam-authenticator/pkg/config"
 	"sigs.k8s.io/aws-iam-authenticator/pkg/token"
 
 	"github.com/spf13/cobra"
@@ -35,13 +36,25 @@ var tokenCmd = &cobra.Command{
 		roleARN := viper.GetString("role")
 		externalID := viper.GetString("externalID")
 		clusterID := viper.GetString("clusterID")
+		primaryID := viper.GetString("primaryID")
+		secondaryID := viper.GetString("secondaryID")
 		tokenOnly := viper.GetBool("tokenOnly")
 		forwardSessionName := viper.GetBool("forwardSessionName")
 		sessionName := viper.GetString("sessionName")
 		cache := viper.GetBool("cache")
 
-		if clusterID == "" {
-			fmt.Fprintf(os.Stderr, "Error: cluster ID not specified\n")
+		var exactlyOne = 0
+		if clusterID != "" {
+			exactlyOne++
+		}
+		if primaryID != "" {
+			exactlyOne++
+		}
+		if secondaryID != "" {
+			exactlyOne++
+		}
+		if exactlyOne != 1 {
+			fmt.Fprintf(os.Stderr, "Exactly one of [cluster-id=%s, primary-id=%s, secondary-id=%s] may be set\n", clusterID, primaryID, secondaryID)
 			cmd.Usage()
 			os.Exit(1)
 		}
@@ -62,7 +75,7 @@ var tokenCmd = &cobra.Command{
 		}
 
 		tok, err = gen.GetWithOptions(&token.GetTokenOptions{
-			ClusterID:            clusterID,
+			Cluster:              config.Cluster{ID: clusterID, ID2: primaryID, ID3: secondaryID},
 			AssumeRoleARN:        roleARN,
 			AssumeRoleExternalID: externalID,
 			SessionName:          sessionName,

@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 
+	"sigs.k8s.io/aws-iam-authenticator/pkg/config"
 	"sigs.k8s.io/aws-iam-authenticator/pkg/token"
 
 	"github.com/aws/aws-sdk-go/aws/ec2metadata"
@@ -59,7 +60,7 @@ var verifyCmd = &cobra.Command{
 			fmt.Printf("[Warn] Region not found in instance metadata, err: %v", err)
 		}
 
-		id, err := token.NewVerifier(clusterID, partition, instanceRegion).Verify(tok)
+		id, err := token.NewVerifier(config.Cluster{ID: clusterID}, partition, instanceRegion).Verify(tok)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "could not verify token: %v\n", err)
 			os.Exit(1)

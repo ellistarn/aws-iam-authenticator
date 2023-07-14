@@ -395,6 +395,8 @@ They can share the same exact configuration file, since there are no secrets sto
 ```yaml
 # a unique-per-cluster identifier to prevent replay attacks (see above)
 clusterID: my-dev-cluster.example.com
+primaryID: wodwei-fmvbqi-fpqwta-zmxnqp
+secondaryID: wodwei-fmvbqi-fpqwta-zmxnqp
 
 # default IAM role to assume for `aws-iam-authenticator token`
 defaultRole: arn:aws:iam::000000000000:role/KubernetesAdmin

@@ -53,19 +53,23 @@ func Execute() {
 	}
 }
 
+const idDescription = "Specify a unique-per-cluster identifier for your aws-iam-authenticator installation. Servers may set any or all of [cluster-id, primary-id, secondary-id]. Clients must only set one of them, which must agree with the corresponding server value."
+
 func init() {
 	cobra.OnInitialize(initConfig)
 	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "Load configuration from `filename`")
 
 	rootCmd.PersistentFlags().StringP("log-format", "l", "text", "Specify log format to use when logging to stderr [text or json]")
 
-	rootCmd.PersistentFlags().StringP(
-		"cluster-id",
-		"i",
-		"",
-		"Specify the cluster `ID`, a unique-per-cluster identifier for your aws-iam-authenticator installation.")
+	rootCmd.PersistentFlags().StringP("cluster-id", "i", "", idDescription)
 	viper.BindPFlag("clusterID", rootCmd.PersistentFlags().Lookup("cluster-id"))
 	viper.BindEnv("clusterID", "KUBERNETES_AWS_AUTHENTICATOR_CLUSTER_ID")
+
+	rootCmd.PersistentFlags().String("primary-id", "", idDescription)
+	viper.BindPFlag("primaryID", rootCmd.PersistentFlags().Lookup("primary-id"))
+
+	rootCmd.PersistentFlags().String("secondary-id", "", idDescription)
+	viper.BindPFlag("secondaryID", rootCmd.PersistentFlags().Lookup("secondary-id"))
 
 	featureGates.Add(config.DefaultFeatureGates)
 	featureGates.AddFlag(rootCmd.PersistentFlags())
@@ -86,10 +90,13 @@ func initConfig() {
 }
 
 func getConfig() (config.Config, error) {
-
 	cfg := config.Config{
-		PartitionID:                       viper.GetString("server.partition"),
-		ClusterID:                         viper.GetString("clusterID"),
+		PartitionID: viper.GetString("server.partition"),
+		Cluster: config.Cluster{
+			ID:  viper.GetString("clusterID"),
+			ID2: viper.GetString("primaryID"),
+			ID3: viper.GetString("secondaryID"),
+		},
 		ServerEC2DescribeInstancesRoleARN: viper.GetString("server.ec2DescribeInstancesRoleARN"),
 		HostPort:                          viper.GetInt("server.port"),
 		Hostname:                          viper.GetString("server.hostname"),
@@ -134,10 +141,6 @@ func getConfig() (config.Config, error) {
 	}
 	if featureGates.Enabled(config.ConfiguredInitDirectories) {
 		logrus.Info("ConfiguredInitDirectories feature enabled")
-	}
-
-	if cfg.ClusterID == "" {
-		return cfg, errors.New("cluster ID cannot be empty")
 	}
 
 	partitionKeys := []string{}

@@ -20,6 +20,7 @@ import (
 	"k8s.io/client-go/pkg/apis/clientauthentication"
 	clientauthv1 "k8s.io/client-go/pkg/apis/clientauthentication/v1"
 	clientauthv1beta1 "k8s.io/client-go/pkg/apis/clientauthentication/v1beta1"
+	"sigs.k8s.io/aws-iam-authenticator/pkg/config"
 	"sigs.k8s.io/aws-iam-authenticator/pkg/metrics"
 )
 
@@ -31,7 +32,7 @@ func TestMain(m *testing.M) {
 func validationErrorTest(t *testing.T, partition string, token string, expectedErr string) {
 	t.Helper()
 
-	_, err := NewVerifier("", partition, "").(tokenVerifier).Verify(token)
+	_, err := NewVerifier(config.Cluster{}, partition, "").(tokenVerifier).Verify(token)
 	errorContains(t, err, expectedErr)
 }
 
@@ -159,7 +160,7 @@ func TestSTSEndpoints(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		verifier := NewVerifier("", c.partition, c.region).(tokenVerifier)
+		verifier := NewVerifier(config.Cluster{}, c.partition, c.region).(tokenVerifier)
 		if err := verifier.verifyHost(c.domain); err != nil && c.valid {
 			t.Errorf("%s is not valid endpoint for partition %s", c.domain, c.partition)
 		}
@@ -217,7 +218,7 @@ func TestVerifyNoRedirectsFollowed(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	tokVerifier := NewVerifier("", "aws", "").(tokenVerifier)
+	tokVerifier := NewVerifier(config.Cluster{}, "aws", "").(tokenVerifier)
 
 	resp, err := tokVerifier.client.Get(ts.URL)
 	if err != nil {
